@@ -258,7 +258,7 @@ MonoBehaviour:
   m_MinValue: 0
   m_MaxValue: 1
   m_WholeNumbers: 0
-  m_Value: 0.826
+  m_Value: 0
   m_OnValueChanged:
     m_PersistentCalls:
       m_Calls: []
@@ -741,7 +741,7 @@ MonoBehaviour:
   cameraContainer: {fileID: 330234288}
   dotContainer: {fileID: 1989356473}
   cameraDisplaySize: {x: 1280, y: 720}
-  laserDotPrefab: {fileID: 1084669471925288463, guid: 1318817e1c4f8c3488d1962706ff1a19, type: 3}
+  laserDotPrefab: {fileID: 0}
   thresholdSlider: {fileID: 27561930}
 --- !u!1 &832575517
 GameObject:
