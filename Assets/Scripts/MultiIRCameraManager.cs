@@ -88,7 +88,7 @@ public class MultiIRCameraManager : MonoBehaviour
         rect.anchorMin = new Vector2(0, 0.5f);
         rect.anchorMax = new Vector2(0, 0.5f);
         rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x-590, 0);
-
+        //rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x+50, 0);
         //==============================================
         // (2) LaserDot UI
         //==============================================
