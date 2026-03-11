@@ -1,112 +1,100 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class TargetManager : MonoBehaviour
 {
-    [Header("UI 放置區域")]
-    public RectTransform targetContainer;         // 放置目標物的區域（通常與 CameraContainer 大小一致）
+    public RectTransform dotContainer;
+    public GameObject targetPrefab;
 
-    [Header("Prefabs")]
-    public RectTransform targetPrefab;            // 你做好的 Target prefab（UI Image）
+    public int targetCount = 5;
+    public float spawnAreaWidth = 800f;
+    public float spawnAreaHeight = 400f;
 
-    [Header("目標物設定")]
-    public int minTargets = 3;
-    public int maxTargets = 6;
-    public float targetRadius = 40f;              // 點擊判定半徑
-
-    [Header("再生設定")]
     public float respawnDelay = 3f;
 
-    private List<RectTransform> currentTargets = new List<RectTransform>();
-    private bool respawning = false;
+    public Text scoreText;
 
-    public static object Instance { get; internal set; }
+    private List<GameObject> targets = new List<GameObject>();
+    private int score = 0;
+
+    bool respawning = false;
 
     void Start()
     {
         SpawnTargets();
+        UpdateScoreUI();
     }
 
     void Update()
     {
-        //不用在這裡做事情，由 LaserDetector 呼叫 HitCheck()
-    }
-
-    //============================================================
-    // ★ 被 LaserDetector 呼叫，檢查是否有擊中任一目標物
-    //============================================================
-    public void HitCheck(Vector2 laserPos)
-    {
-
-        if (currentTargets.Count == 0)
-            return;
-
-        Debug.Log("Hit check!");
-        for (int i = currentTargets.Count - 1; i >= 0; i--)
+        if (!respawning && AllTargetsDestroyed())
         {
-            RectTransform target = currentTargets[i];
-
-            // Target 座標
-            Vector2 targetPos = target.anchoredPosition;
-
-            float dist = Vector2.Distance(laserPos, targetPos);
-
-            if (dist <= targetRadius)
-            {
-                Debug.Log("Hit!");
-                Destroy(target.gameObject);
-                currentTargets.RemoveAt(i);
-            }
-        }
-
-        // 若全部被打掉 → 等待再生
-        if (currentTargets.Count == 0 && !respawning)
-        {
-            respawning = true;
-            StartCoroutine(Respawn());
+            StartCoroutine(RespawnRoutine());
         }
     }
 
-    //============================================================
-    // ★ 生成目標物
-    //============================================================
     void SpawnTargets()
     {
-        currentTargets.Clear();
-
-        int targetCount = Random.Range(minTargets, maxTargets + 1);
-
         for (int i = 0; i < targetCount; i++)
         {
-            RectTransform target = Instantiate(targetPrefab, targetContainer);
-            target.anchoredPosition = RandomInside(targetContainer);
-            currentTargets.Add(target);
+            Vector2 pos = new Vector2(
+                Random.Range(-spawnAreaWidth / 2, spawnAreaWidth / 2),
+                Random.Range(-spawnAreaHeight / 2, spawnAreaHeight / 2)
+            );
+
+            GameObject t = Instantiate(targetPrefab, dotContainer);
+            RectTransform rt = t.GetComponent<RectTransform>();
+
+            rt.anchoredPosition = pos;
+
+            targets.Add(t);
         }
+    }
+
+    bool AllTargetsDestroyed()
+    {
+        foreach (var t in targets)
+        {
+            if (t.activeSelf)
+                return false;
+        }
+
+        return true;
+    }
+
+    IEnumerator RespawnRoutine()
+    {
+        respawning = true;
+
+        yield return new WaitForSeconds(respawnDelay);
+
+        foreach (var t in targets)
+            Destroy(t);
+
+        targets.Clear();
+
+        SpawnTargets();
 
         respawning = false;
     }
 
-    //============================================================
-    // ★ 隨機位置（container 範圍內）
-    //============================================================
-    Vector2 RandomInside(RectTransform area)
+    public void HitTarget(GameObject target)
     {
-        float w = area.rect.width;
-        float h = area.rect.height;
+        if (!target.activeSelf)
+            return;
 
-        float x = Random.Range(-w / 2f, w / 2f);
-        float y = Random.Range(-h / 2f, h / 2f);
+        target.SetActive(false);
 
-        return new Vector2(x, y);
+        score++;
+
+        UpdateScoreUI();
     }
 
-    //============================================================
-    // ★ 延遲再生
-    //============================================================
-    IEnumerator Respawn()
+    void UpdateScoreUI()
     {
-        yield return new WaitForSeconds(respawnDelay);
-        SpawnTargets();
+        if (scoreText != null)
+            scoreText.text = "Score : " + score;
     }
 }

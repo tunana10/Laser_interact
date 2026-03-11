@@ -87,19 +87,19 @@ public class MultiIRCameraManager : MonoBehaviour
         rect.sizeDelta = cameraDisplaySize;
         rect.anchorMin = new Vector2(0, 0.5f);
         rect.anchorMax = new Vector2(0, 0.5f);
-        rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x-590, 0);
-        //rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x+50, 0);
+        //rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x-590, 0);
+        rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x+50, 0);
         //==============================================
         // (2) LaserDot UI
         //==============================================
-        GameObject dotObj = new GameObject($"LaserDot_{index}");
-        dotObj.transform.SetParent(dotContainer, false);
+        //GameObject dotObj = new GameObject($"LaserDot_{index}");
+       // dotObj.transform.SetParent(dotContainer, false);
 
-        Image dot = dotObj.AddComponent<Image>();
-        dot.color = Color.red;
+        //Image dot = dotObj.AddComponent<Image>();
+        //dot.color = Color.red;
 
-        RectTransform dotRT = dot.GetComponent<RectTransform>();
-        dotRT.sizeDelta = new Vector2(20, 20);
+        //RectTransform dotRT = dot.GetComponent<RectTransform>();
+        //dotRT.sizeDelta = new Vector2(20, 20);
 
         //==============================================
         // (3) LaserDetector

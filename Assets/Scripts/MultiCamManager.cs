@@ -16,7 +16,7 @@ using UnityEngine.UI;
 public class MultiCamManager : MonoBehaviour
 {
     [Header("Camera selection")]
-    public int desiredCameraCount = 2; // 想要啟動幾台（若超過可用 camera，會以可用數量為準）
+    public int desiredCameraCount = 1; // 想要啟動幾台（若超過可用 camera，會以可用數量為準）
     public int[] cameraIndices = new int[0]; // 若填，會使用指定 index
 
     [Header("UI")]

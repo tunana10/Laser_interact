@@ -4,31 +4,65 @@ using System.Collections.Generic;
 
 public class LaserDetector : MonoBehaviour
 {
+    [Header("Camera")]
     public WebCamTexture sourceWebcam;
     public RenderTexture renderTexture;
     public RawImage cameraRawImage;
+
+    [Header("Detection")]
     public Slider thresholdSlider;
-    public float threshold = 0.8f;
-    public GameObject laserDotPrefab; // UI Image prefab，複數光點使用
+    [Range(0f, 1f)]
+    public float threshold = 0.5f;
+
+    public int highPowerPixelThreshold = 200;  // 300mW 判定面積
+    public int minClusterPixelCount = 50;      // 過濾雜訊
+
+    [Header("Cluster Distance Filter")]
+    public float minDistanceBetweenClusters = 150f; //  新增：cluster 最小距離（像素）
+
+    [Header("UI")]
+    public GameObject laserDotPrefab;
+
+    [Header("Performance")]
+    public int processEveryNFrames = 2;
+
+    [Header("Target")]
+    TargetManager targetManager;
+    public float targetHitRadius = 120f;
+    private List<RectTransform> targets = new List<RectTransform>();
 
     private Texture2D tempTex;
-    private TargetManager targetManager;
-
-    // 多個紅點的管理
     private List<RectTransform> laserDots = new List<RectTransform>();
 
-    // 分群距離（像素）
-    public float minDistanceBetweenDots = 300f;
+    // ====== Cluster 結構 ======
+    class BrightCluster
+    {
+        public Vector2 center;
+        public float averageBrightness;
+        public float maxBrightness;
+        public int pixelCount;
+    }
 
     void Start()
     {
         tempTex = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.RGB24, false);
-        targetManager = GameObject.Find("TargetManager").GetComponent<TargetManager>();
+        targetManager = FindObjectOfType<TargetManager>();
+
+        //GameObject[] objs = GameObject.FindGameObjectsWithTag("Target");
+        //foreach (var o in objs)
+        //{
+        //    RectTransform rt = o.GetComponent<RectTransform>();
+        //    if (rt != null)
+        //        targets.Add(rt);
+        //}
     }
 
     void Update()
     {
         if (sourceWebcam == null || !sourceWebcam.isPlaying)
+            return;
+
+        if (Time.frameCount % processEveryNFrames != 0)
             return;
 
         if (thresholdSlider != null)
@@ -41,48 +75,140 @@ public class LaserDetector : MonoBehaviour
         tempTex.Apply();
         RenderTexture.active = null;
 
+        DetectLaserClusters();
+    }
+
+    void DetectLaserClusters()
+    {
         int width = tempTex.width;
         int height = tempTex.height;
+
         Color32[] pixels = tempTex.GetPixels32();
+        float[] brightness = new float[pixels.Length];
+        bool[] visited = new bool[pixels.Length];
 
-        List<Vector2> detectedPoints = new List<Vector2>();
-
-        // 尋找亮點
+        // 建立亮度 map
         for (int i = 0; i < pixels.Length; i++)
         {
-            float v = (pixels[i].r + pixels[i].g + pixels[i].b) / (3f * 255f);
-
-            if (v > threshold)
-            {
-                int x = i % width;
-                int y = i / width;
-                Vector2 newPoint = new Vector2(x, y);
-
-                // 如果這個點離現有 detectedPoints 太近，視為同一 cluster，跳過
-                bool tooClose = false;
-                foreach (var p in detectedPoints)
-                {
-                    if (Vector2.Distance(p, newPoint) < minDistanceBetweenDots)
-                    {
-                        tooClose = true;
-                        break;
-                    }
-                }
-                if (!tooClose)
-                    detectedPoints.Add(newPoint);
-            }
+            brightness[i] = (pixels[i].r + pixels[i].g + pixels[i].b) / (3f * 255f);
         }
 
-        // 先隱藏多餘紅點
-        for (int i = detectedPoints.Count; i < laserDots.Count; i++)
+        List<BrightCluster> clusters = new List<BrightCluster>();
+
+        // 搜尋 cluster
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            if (visited[i]) continue;
+            if (brightness[i] < threshold) continue;
+
+            BrightCluster cluster = FloodFill(i, width, height, brightness, visited);
+
+            if (cluster.pixelCount >= minClusterPixelCount)
+                clusters.Add(cluster);
+        }
+
+        //  新增：距離過濾（Non-Maximum Suppression）
+        clusters = FilterClustersByDistance(clusters);
+
+        UpdateLaserDots(clusters, width, height);
+    }
+
+    BrightCluster FloodFill(int startIndex, int width, int height, float[] brightness, bool[] visited)
+    {
+        Queue<int> queue = new Queue<int>();
+        queue.Enqueue(startIndex);
+
+        float sumBrightness = 0f;
+        float maxBrightness = 0f;
+        int count = 0;
+        float sumX = 0f;
+        float sumY = 0f;
+
+        while (queue.Count > 0)
+        {
+            int idx = queue.Dequeue();
+            if (visited[idx]) continue;
+
+            visited[idx] = true;
+
+            if (brightness[idx] < threshold)
+                continue;
+
+            int x = idx % width;
+            int y = idx / width;
+
+            sumBrightness += brightness[idx];
+            maxBrightness = Mathf.Max(maxBrightness, brightness[idx]);
+            count++;
+
+            sumX += x;
+            sumY += y;
+
+            TryAddNeighbor(queue, idx - 1, x > 0);
+            TryAddNeighbor(queue, idx + 1, x < width - 1);
+            TryAddNeighbor(queue, idx - width, y > 0);
+            TryAddNeighbor(queue, idx + width, y < height - 1);
+        }
+
+        BrightCluster c = new BrightCluster();
+
+        if (count > 0)
+        {
+            c.center = new Vector2(sumX / count, sumY / count);
+            c.averageBrightness = sumBrightness / count;
+            c.maxBrightness = maxBrightness;
+            c.pixelCount = count;
+        }
+
+        return c;
+    }
+
+    void TryAddNeighbor(Queue<int> queue, int index, bool condition)
+    {
+        if (condition)
+            queue.Enqueue(index);
+    }
+
+    //  核心：距離過濾
+    List<BrightCluster> FilterClustersByDistance(List<BrightCluster> clusters)
+    {
+        List<BrightCluster> result = new List<BrightCluster>();
+
+        // 先依 pixelCount 由大到小排序（保留大光斑）
+        clusters.Sort((a, b) => b.pixelCount.CompareTo(a.pixelCount));
+
+        foreach (var cluster in clusters)
+        {
+            bool tooClose = false;
+
+            foreach (var kept in result)
+            {
+                float dist = Vector2.Distance(cluster.center, kept.center);
+                if (dist < minDistanceBetweenClusters)
+                {
+                    tooClose = true;
+                    break;
+                }
+            }
+
+            if (!tooClose)
+                result.Add(cluster);
+        }
+
+        return result;
+    }
+
+    void UpdateLaserDots(List<BrightCluster> clusters, int width, int height)
+    {
+        for (int i = clusters.Count; i < laserDots.Count; i++)
             laserDots[i].gameObject.SetActive(false);
 
-        // 顯示/更新紅點
-        for (int i = 0; i < detectedPoints.Count; i++)
+        for (int i = 0; i < clusters.Count; i++)
         {
-            Vector2 px = detectedPoints[i];
+            BrightCluster c = clusters[i];
 
-            // 轉成 normalized
+            Vector2 px = c.center;
+
             float nx = px.x / width;
             float ny = px.y / height;
 
@@ -94,6 +220,7 @@ public class LaserDetector : MonoBehaviour
             Vector2 finalPos = cameraRawImage.rectTransform.anchoredPosition + localPos;
 
             RectTransform dot;
+
             if (i < laserDots.Count)
             {
                 dot = laserDots[i];
@@ -108,9 +235,45 @@ public class LaserDetector : MonoBehaviour
 
             dot.anchoredPosition = finalPos;
 
-            // 傳給 TargetManager
-            if (targetManager != null)
-                targetManager.HitCheck(finalPos);
+            Image img = dot.GetComponent<Image>();
+
+            bool isHighPower = c.pixelCount >= highPowerPixelThreshold;
+
+            if (isHighPower)
+            {
+                img.color = Color.green;
+
+                CheckTargetHit(dot);   // 新增
+            }
+            else
+            {
+                img.color = Color.white;
+            }
+
+
         }
     }
+    void CheckTargetHit(RectTransform laserDot)
+    {
+        GameObject[] targets = GameObject.FindGameObjectsWithTag("Target");
+
+        foreach (var t in targets)
+        {
+            if (!t.activeSelf)
+                continue;
+
+            RectTransform rt = t.GetComponent<RectTransform>();
+
+            float dist = Vector2.Distance(
+                laserDot.anchoredPosition,
+                rt.anchoredPosition
+            );
+
+            if (dist < targetHitRadius)
+            {
+                targetManager.HitTarget(t);
+            }
+        }
+    }
+
 }
