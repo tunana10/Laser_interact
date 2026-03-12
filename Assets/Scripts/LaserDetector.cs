@@ -6,60 +6,79 @@ public class LaserDetector : MonoBehaviour
 {
     [Header("Camera")]
     public WebCamTexture sourceWebcam;
-    public RenderTexture renderTexture;
     public RawImage cameraRawImage;
 
     [Header("Detection")]
     public Slider thresholdSlider;
+
     [Range(0f, 1f)]
-    public float threshold = 0.5f;
+    public float threshold = 0.25f;
 
-    public int highPowerPixelThreshold = 200;  // 300mW 判定面積
-    public int minClusterPixelCount = 50;      // 過濾雜訊
+    [Header("Laser Power Levels")]
+    public float lowPowerThreshold = 0.15f;
+    public float highPowerThreshold = 0.2f;
 
-    [Header("Cluster Distance Filter")]
-    public float minDistanceBetweenClusters = 150f; //  新增：cluster 最小距離（像素）
+    [Header("Noise Filter")]
+    public int minBrightPixels = 8;
+    public int persistenceFrames = 2;
+
+    [Header("Grid")]
+    public int gridX = 12;
+    public int gridY = 8;
 
     [Header("UI")]
     public GameObject laserDotPrefab;
+    public GameObject controlPointPrefab;
+
+    [Header("Grid Debug")]
+    public bool showGrid = true;
+    public Color gridColor = new Color(1, 1, 1, 0.3f);
 
     [Header("Performance")]
     public int processEveryNFrames = 2;
 
-    [Header("Target")]
     TargetManager targetManager;
-    public float targetHitRadius = 120f;
-    private List<RectTransform> targets = new List<RectTransform>();
 
-    private Texture2D tempTex;
-    private List<RectTransform> laserDots = new List<RectTransform>();
+    RectTransform gridContainer;
 
-    // ====== Cluster 結構 ======
-    class BrightCluster
+    Color32[] pixels;
+
+    int[,] persistenceCounter;
+
+    RectTransform[,] controlPoints;
+
+    List<Image> gridLines = new List<Image>();
+
+    List<RectTransform> laserDots = new List<RectTransform>();
+
+    struct GridCell
     {
-        public Vector2 center;
-        public float averageBrightness;
-        public float maxBrightness;
-        public int pixelCount;
+        public int x;
+        public int y;
+        public float brightness;
+
+        public GridCell(int gx, int gy, float b)
+        {
+            x = gx;
+            y = gy;
+            brightness = b;
+        }
     }
 
     void Start()
     {
-        tempTex = new Texture2D(renderTexture.width, renderTexture.height, TextureFormat.RGB24, false);
+        pixels = new Color32[sourceWebcam.width * sourceWebcam.height];
+
+        persistenceCounter = new int[gridX, gridY];
+
         targetManager = FindObjectOfType<TargetManager>();
 
-        //GameObject[] objs = GameObject.FindGameObjectsWithTag("Target");
-        //foreach (var o in objs)
-        //{
-        //    RectTransform rt = o.GetComponent<RectTransform>();
-        //    if (rt != null)
-        //        targets.Add(rt);
-        //}
+        CreateGrid();
     }
 
     void Update()
     {
-        if (sourceWebcam == null || !sourceWebcam.isPlaying)
+        if (!sourceWebcam.isPlaying)
             return;
 
         if (Time.frameCount % processEveryNFrames != 0)
@@ -68,156 +87,202 @@ public class LaserDetector : MonoBehaviour
         if (thresholdSlider != null)
             threshold = thresholdSlider.value;
 
-        Graphics.Blit(sourceWebcam, renderTexture);
-
-        RenderTexture.active = renderTexture;
-        tempTex.ReadPixels(new Rect(0, 0, renderTexture.width, renderTexture.height), 0, 0);
-        tempTex.Apply();
-        RenderTexture.active = null;
-
-        DetectLaserClusters();
+        DetectLaserGrid();
     }
 
-    void DetectLaserClusters()
+    void CreateGrid()
     {
-        int width = tempTex.width;
-        int height = tempTex.height;
-
-        Color32[] pixels = tempTex.GetPixels32();
-        float[] brightness = new float[pixels.Length];
-        bool[] visited = new bool[pixels.Length];
-
-        // 建立亮度 map
-        for (int i = 0; i < pixels.Length; i++)
+        // 如果 controlPointPrefab 沒被指定，自動從 Resources 載入
+        if (controlPointPrefab == null)
         {
-            brightness[i] = (pixels[i].r + pixels[i].g + pixels[i].b) / (3f * 255f);
-        }
-
-        List<BrightCluster> clusters = new List<BrightCluster>();
-
-        // 搜尋 cluster
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            if (visited[i]) continue;
-            if (brightness[i] < threshold) continue;
-
-            BrightCluster cluster = FloodFill(i, width, height, brightness, visited);
-
-            if (cluster.pixelCount >= minClusterPixelCount)
-                clusters.Add(cluster);
-        }
-
-        //  新增：距離過濾（Non-Maximum Suppression）
-        clusters = FilterClustersByDistance(clusters);
-
-        UpdateLaserDots(clusters, width, height);
-    }
-
-    BrightCluster FloodFill(int startIndex, int width, int height, float[] brightness, bool[] visited)
-    {
-        Queue<int> queue = new Queue<int>();
-        queue.Enqueue(startIndex);
-
-        float sumBrightness = 0f;
-        float maxBrightness = 0f;
-        int count = 0;
-        float sumX = 0f;
-        float sumY = 0f;
-
-        while (queue.Count > 0)
-        {
-            int idx = queue.Dequeue();
-            if (visited[idx]) continue;
-
-            visited[idx] = true;
-
-            if (brightness[idx] < threshold)
-                continue;
-
-            int x = idx % width;
-            int y = idx / width;
-
-            sumBrightness += brightness[idx];
-            maxBrightness = Mathf.Max(maxBrightness, brightness[idx]);
-            count++;
-
-            sumX += x;
-            sumY += y;
-
-            TryAddNeighbor(queue, idx - 1, x > 0);
-            TryAddNeighbor(queue, idx + 1, x < width - 1);
-            TryAddNeighbor(queue, idx - width, y > 0);
-            TryAddNeighbor(queue, idx + width, y < height - 1);
-        }
-
-        BrightCluster c = new BrightCluster();
-
-        if (count > 0)
-        {
-            c.center = new Vector2(sumX / count, sumY / count);
-            c.averageBrightness = sumBrightness / count;
-            c.maxBrightness = maxBrightness;
-            c.pixelCount = count;
-        }
-
-        return c;
-    }
-
-    void TryAddNeighbor(Queue<int> queue, int index, bool condition)
-    {
-        if (condition)
-            queue.Enqueue(index);
-    }
-
-    //  核心：距離過濾
-    List<BrightCluster> FilterClustersByDistance(List<BrightCluster> clusters)
-    {
-        List<BrightCluster> result = new List<BrightCluster>();
-
-        // 先依 pixelCount 由大到小排序（保留大光斑）
-        clusters.Sort((a, b) => b.pixelCount.CompareTo(a.pixelCount));
-
-        foreach (var cluster in clusters)
-        {
-            bool tooClose = false;
-
-            foreach (var kept in result)
+            controlPointPrefab = Resources.Load<GameObject>("ControlPointPrefab");
+            if (controlPointPrefab == null)
             {
-                float dist = Vector2.Distance(cluster.center, kept.center);
-                if (dist < minDistanceBetweenClusters)
-                {
-                    tooClose = true;
-                    break;
-                }
+                Debug.LogError("找不到 ControlPointPrefab，請放到 Resources/ControlPointPrefab.prefab");
+                return;
             }
-
-            if (!tooClose)
-                result.Add(cluster);
         }
 
-        return result;
+        GameObject gridObj = new GameObject("GridOverlay");
+        gridObj.transform.SetParent(cameraRawImage.transform, false);
+
+        gridContainer = gridObj.AddComponent<RectTransform>();
+        gridContainer.anchorMin = Vector2.zero;
+        gridContainer.anchorMax = Vector2.one;
+        gridContainer.offsetMin = Vector2.zero;
+        gridContainer.offsetMax = Vector2.zero;
+
+        controlPoints = new RectTransform[gridX + 1, gridY + 1];
+
+        Rect rect = cameraRawImage.rectTransform.rect;
+
+        float stepX = rect.width / gridX;
+        float stepY = rect.height / gridY;
+
+        for (int y = 0; y <= gridY; y++)
+        {
+            for (int x = 0; x <= gridX; x++)
+            {
+                GameObject p = Instantiate(controlPointPrefab, gridContainer);
+
+                RectTransform rt = p.GetComponent<RectTransform>();
+
+                rt.anchorMin = Vector2.zero;
+                rt.anchorMax = Vector2.zero;
+
+                rt.anchoredPosition = new Vector2(x * stepX, y * stepY);
+
+                GridDraggablePoint drag = p.GetComponent<GridDraggablePoint>();
+                drag.detector = this;
+                drag.gridX = x;
+                drag.gridY = y;
+
+                controlPoints[x, y] = rt;
+            }
+        }
+
+        UpdateGridVisual();
     }
 
-    void UpdateLaserDots(List<BrightCluster> clusters, int width, int height)
+    public void UpdateGridVisual()
     {
-        for (int i = clusters.Count; i < laserDots.Count; i++)
+        foreach (var l in gridLines)
+            Destroy(l.gameObject);
+
+        gridLines.Clear();
+
+        for (int y = 0; y <= gridY; y++)
+        {
+            for (int x = 0; x < gridX; x++)
+                DrawLine(controlPoints[x, y], controlPoints[x + 1, y]);
+        }
+
+        for (int x = 0; x <= gridX; x++)
+        {
+            for (int y = 0; y < gridY; y++)
+                DrawLine(controlPoints[x, y], controlPoints[x, y + 1]);
+        }
+    }
+
+    void DrawLine(RectTransform a, RectTransform b)
+    {
+        GameObject line = new GameObject("line");
+        line.transform.SetParent(gridContainer, false);
+
+        Image img = line.AddComponent<Image>();
+        img.color = gridColor;
+
+        RectTransform rt = img.rectTransform;
+
+        Vector2 dir = b.anchoredPosition - a.anchoredPosition;
+
+        float length = dir.magnitude;
+
+        rt.sizeDelta = new Vector2(length, 2);
+
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.zero;
+
+        rt.pivot = new Vector2(0, 0.5f);
+
+        rt.anchoredPosition = a.anchoredPosition;
+
+        float angle = Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg;
+        rt.rotation = Quaternion.Euler(0, 0, angle);
+
+        gridLines.Add(img);
+    }
+
+    Vector2 GetWarpedPosition(int gx, int gy)
+    {
+        RectTransform p00 = controlPoints[gx, gy];
+        RectTransform p10 = controlPoints[gx + 1, gy];
+        RectTransform p01 = controlPoints[gx, gy + 1];
+        RectTransform p11 = controlPoints[gx + 1, gy + 1];
+
+        Vector2 center = (p00.anchoredPosition + p10.anchoredPosition +
+                          p01.anchoredPosition + p11.anchoredPosition) / 4f;
+
+        return center;
+    }
+
+    void DetectLaserGrid()
+    {
+        int width = sourceWebcam.width;
+        int height = sourceWebcam.height;
+
+        sourceWebcam.GetPixels32(pixels);
+
+        int cellW = width / gridX;
+        int cellH = height / gridY;
+
+        List<GridCell> brightCells = new List<GridCell>();
+
+        for (int gy = 0; gy < gridY; gy++)
+        {
+            for (int gx = 0; gx < gridX; gx++)
+            {
+                float brightnessSum = 0;
+                int sampleCount = 0;
+                int brightPixelCount = 0;
+
+                int startX = gx * cellW;
+                int startY = gy * cellH;
+
+                for (int y = 0; y < cellH; y += 2)
+                {
+                    for (int x = 0; x < cellW; x += 2)
+                    {
+                        int px = startX + x;
+                        int py = startY + y;
+
+                        int idx = py * width + px;
+
+                        Color32 c = pixels[idx];
+
+                        float b = c.r / 255f;
+
+                        brightnessSum += b;
+                        sampleCount++;
+
+                        if (b > threshold)
+                            brightPixelCount++;
+                    }
+                }
+
+                if (sampleCount == 0)
+                    continue;
+
+                float avgBrightness = brightnessSum / sampleCount;
+
+                if (brightPixelCount < minBrightPixels)
+                {
+                    persistenceCounter[gx, gy] = 0;
+                    continue;
+                }
+
+                persistenceCounter[gx, gy]++;
+
+                if (persistenceCounter[gx, gy] < persistenceFrames)
+                    continue;
+
+                brightCells.Add(new GridCell(gx, gy, avgBrightness));
+            }
+        }
+
+        UpdateLaserDotsFromCells(brightCells);
+    }
+
+    void UpdateLaserDotsFromCells(List<GridCell> cells)
+    {
+        for (int i = cells.Count; i < laserDots.Count; i++)
             laserDots[i].gameObject.SetActive(false);
 
-        for (int i = 0; i < clusters.Count; i++)
+        for (int i = 0; i < cells.Count; i++)
         {
-            BrightCluster c = clusters[i];
+            GridCell cell = cells[i];
 
-            Vector2 px = c.center;
-
-            float nx = px.x / width;
-            float ny = px.y / height;
-
-            Vector2 localPos = new Vector2(
-                (nx - 0.5f) * cameraRawImage.rectTransform.rect.width,
-                (ny - 0.5f) * cameraRawImage.rectTransform.rect.height
-            );
-
-            Vector2 finalPos = cameraRawImage.rectTransform.anchoredPosition + localPos;
+            Vector2 pos = GetWarpedPosition(cell.x, cell.y);
 
             RectTransform dot;
 
@@ -228,32 +293,29 @@ public class LaserDetector : MonoBehaviour
             }
             else
             {
-                GameObject obj = Instantiate(laserDotPrefab, cameraRawImage.transform.parent);
+                GameObject obj = Instantiate(laserDotPrefab, cameraRawImage.transform);
                 dot = obj.GetComponent<RectTransform>();
                 laserDots.Add(dot);
             }
 
-            dot.anchoredPosition = finalPos;
+            dot.anchorMin = Vector2.zero;
+            dot.anchorMax = Vector2.zero;
+            dot.pivot = new Vector2(0.5f, 0.5f);
+
+            dot.anchoredPosition = pos;
 
             Image img = dot.GetComponent<Image>();
 
-            bool isHighPower = c.pixelCount >= highPowerPixelThreshold;
-
-            if (isHighPower)
-            {
+            if (cell.brightness > highPowerThreshold)
                 img.color = Color.green;
-
-                CheckTargetHit(dot);   // 新增
-            }
             else
-            {
                 img.color = Color.white;
-            }
 
-
+            CheckTargetHit(cell);
         }
     }
-    void CheckTargetHit(RectTransform laserDot)
+
+    void CheckTargetHit(GridCell laserCell)
     {
         GameObject[] targets = GameObject.FindGameObjectsWithTag("Target");
 
@@ -262,18 +324,15 @@ public class LaserDetector : MonoBehaviour
             if (!t.activeSelf)
                 continue;
 
-            RectTransform rt = t.GetComponent<RectTransform>();
+            TargetCell tc = t.GetComponent<TargetCell>();
 
-            float dist = Vector2.Distance(
-                laserDot.anchoredPosition,
-                rt.anchoredPosition
-            );
+            if (tc == null)
+                continue;
 
-            if (dist < targetHitRadius)
+            if (tc.gridX == laserCell.x && tc.gridY == laserCell.y)
             {
                 targetManager.HitTarget(t);
             }
         }
     }
-
 }

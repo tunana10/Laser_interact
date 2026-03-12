@@ -80,33 +80,19 @@ public class MultiIRCameraManager : MonoBehaviour
 
         RawImage raw = imgObj.AddComponent<RawImage>();
 
-        RenderTexture rt = new RenderTexture(1280, 720, 0, RenderTextureFormat.ARGB32);
-        raw.texture = rt;
+        raw.texture = tex;   // ← 直接顯示 WebCamTexture
 
         RectTransform rect = raw.GetComponent<RectTransform>();
         rect.sizeDelta = cameraDisplaySize;
         rect.anchorMin = new Vector2(0, 0.5f);
         rect.anchorMax = new Vector2(0, 0.5f);
-        //rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x-590, 0);
-        rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x+50, 0);
+        rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x + 50, 0);
         //==============================================
-        // (2) LaserDot UI
-        //==============================================
-        //GameObject dotObj = new GameObject($"LaserDot_{index}");
-       // dotObj.transform.SetParent(dotContainer, false);
-
-        //Image dot = dotObj.AddComponent<Image>();
-        //dot.color = Color.red;
-
-        //RectTransform dotRT = dot.GetComponent<RectTransform>();
-        //dotRT.sizeDelta = new Vector2(20, 20);
-
-        //==============================================
-        // (3) LaserDetector
+        // (2) LaserDetector
         //==============================================
         LaserDetector detector = imgObj.AddComponent<LaserDetector>();
         detector.sourceWebcam = tex;
-        detector.renderTexture = rt;
+        //detector.renderTexture = rt;
         detector.cameraRawImage = raw;
         //detector.laserDotUI = dotRT;
         detector.thresholdSlider = thresholdSlider;
