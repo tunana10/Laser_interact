@@ -56,6 +56,16 @@ public class LaserDetector : MonoBehaviour
     // PlayerPrefs key prefix（以 GameObject.name 為前綴，避免多個 Detector 互相覆寫）
     private string prefsPrefix;
 
+    public bool TryScreenPointToGridLocalPoint(Vector2 screenPoint, Camera uiCamera, out Vector2 localPoint)
+    {
+        if (gridContainer == null)
+        {
+            localPoint = Vector2.zero;
+            return false;
+        }
+        return RectTransformUtility.ScreenPointToLocalPointInRectangle(gridContainer, screenPoint, uiCamera, out localPoint);
+    }
+
     struct GridCell
     {
         public int x;
