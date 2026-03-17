@@ -12,7 +12,7 @@ public class LaserDetector : MonoBehaviour
     [Header("Detection")]
     public Slider thresholdSlider;
     [Range(0f, 1f)]
-    public float threshold = 0.25f;
+    public float threshold = 0.5f;
 
     [Header("Laser Power Levels")]
     public float lowPowerThreshold = 0.15f;
