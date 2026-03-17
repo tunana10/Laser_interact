@@ -56,6 +56,9 @@ public class LaserDetector : MonoBehaviour
     // PlayerPrefs key prefix（以 GameObject.name 為前綴，避免多個 Detector 互相覆寫）
     private string prefsPrefix;
 
+    // threshold slider listener 存放以便移除
+    private UnityAction<float> thresholdListener;
+
     public bool TryScreenPointToGridLocalPoint(Vector2 screenPoint, Camera uiCamera, out Vector2 localPoint)
     {
         if (gridContainer == null)
@@ -84,8 +87,9 @@ public class LaserDetector : MonoBehaviour
 
     void Start()
     {
-        // 先載入儲存的 grid 大小（如果有）
+        // 載入上次儲存的 threshold 與 grid 大小（如有）
         LoadGridSize();
+        LoadThreshold();
 
         // pixels 會在 DetectLaserGrid 裡檢查尺寸並重分配，這裡盡量避免 null 狀況
         pixels = new Color32[0];
@@ -103,13 +107,33 @@ public class LaserDetector : MonoBehaviour
 
         if (resetGridButton != null)
             resetGridButton.onClick.AddListener(ResetGrid);
+
+        // 使用 Slider 的 onValueChanged 更新 threshold 並儲存（避免每幀覆寫）
+        if (thresholdSlider != null)
+        {
+            // 將 slider 初始化為目前 threshold
+            thresholdSlider.value = threshold;
+            thresholdListener = v =>
+            {
+                threshold = v;
+                SaveThreshold();
+            };
+            thresholdSlider.onValueChanged.AddListener(thresholdListener);
+        }
+    }
+
+    void OnDestroy()
+    {
+        if (thresholdSlider != null && thresholdListener != null)
+            thresholdSlider.onValueChanged.RemoveListener(thresholdListener);
     }
 
     void Update()
     {
         if (sourceWebcam == null || !sourceWebcam.isPlaying) return;
         if (Time.frameCount % processEveryNFrames != 0) return;
-        if (thresholdSlider != null) threshold = thresholdSlider.value;
+
+        // threshold 不再每幀從 Slider 覆寫，改由 listener 更新並儲存。
 
         DetectLaserGrid();
         UpdateTargetsPosition();
@@ -443,5 +467,21 @@ public class LaserDetector : MonoBehaviour
             gridX = Mathf.Max(1, PlayerPrefs.GetInt(prefsPrefix + "gridX"));
         if (PlayerPrefs.HasKey(prefsPrefix + "gridY"))
             gridY = Mathf.Max(1, PlayerPrefs.GetInt(prefsPrefix + "gridY"));
+    }
+
+    // 儲存 / 載入 threshold
+    void SaveThreshold()
+    {
+        PlayerPrefs.SetFloat(prefsPrefix + "threshold", threshold);
+        PlayerPrefs.Save();
+    }
+
+    void LoadThreshold()
+    {
+        prefsPrefix = gameObject.name + "_LaserDetector_";
+        if (PlayerPrefs.HasKey(prefsPrefix + "threshold"))
+        {
+            threshold = Mathf.Clamp01(PlayerPrefs.GetFloat(prefsPrefix + "threshold"));
+        }
     }
 }
