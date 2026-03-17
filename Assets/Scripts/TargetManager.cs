@@ -1,3 +1,4 @@
+
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -14,7 +15,6 @@ public class TargetManager : MonoBehaviour
     public Text scoreText;
 
     private LaserDetector detector;
-
     private List<GameObject> targets = new List<GameObject>();
     private int score = 0;
 
@@ -30,12 +30,12 @@ public class TargetManager : MonoBehaviour
         while (detector == null)
         {
             detector = FindObjectOfType<LaserDetector>();
-
             if (detector == null)
                 yield return new WaitForSeconds(0.2f);
         }
 
-        Debug.Log("LaserDetector 已連接");
+        while (!detector.IsGridReady)
+            yield return null;
 
         SpawnTargets();
         UpdateScoreUI();
@@ -43,18 +43,12 @@ public class TargetManager : MonoBehaviour
 
     void Update()
     {
-        if (detector == null)
-            return;
+        if (detector == null) return;
 
         if (!respawning && AllTargetsDestroyed())
-        {
             StartCoroutine(RespawnRoutine());
-        }
     }
 
-    // ================================
-    // Grid Spawn
-    // ================================
     void SpawnTargets()
     {
         HashSet<Vector2Int> usedCells = new HashSet<Vector2Int>();
@@ -62,48 +56,30 @@ public class TargetManager : MonoBehaviour
         for (int i = 0; i < targetCount; i++)
         {
             Vector2Int cell;
-
             do
             {
                 int gx = Random.Range(0, detector.gridX);
                 int gy = Random.Range(0, detector.gridY);
-
                 cell = new Vector2Int(gx, gy);
-
             } while (usedCells.Contains(cell));
 
             usedCells.Add(cell);
 
             GameObject t = Instantiate(targetPrefab, dotContainer);
-
             PlaceTargetOnGrid(t, cell.x, cell.y);
-
             targets.Add(t);
         }
     }
 
-    // ================================
-    // Grid Position
-    // ================================
     void PlaceTargetOnGrid(GameObject target, int gx, int gy)
     {
         RectTransform cam = detector.cameraRawImage.rectTransform;
-
-        float cellW = cam.rect.width / detector.gridX;
-        float cellH = cam.rect.height / detector.gridY;
-
-        float px = (gx + 0.5f) * cellW;
-        float py = (gy + 0.5f) * cellH;
-
         RectTransform rt = target.GetComponent<RectTransform>();
 
         rt.SetParent(cam);
-
         rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.zero;
+        rt.anchorMax = Vector2.one;
         rt.pivot = new Vector2(0.5f, 0.5f);
-
-        rt.anchoredPosition = new Vector2(px, py);
 
         TargetCell tc = target.GetComponent<TargetCell>();
         if (tc == null)
@@ -111,59 +87,54 @@ public class TargetManager : MonoBehaviour
 
         tc.gridX = gx;
         tc.gridY = gy;
+
+        Vector2 pos = detector.GetWarpedPosition(gx, gy);
+        rt.anchoredPosition = pos;
     }
 
-    // ================================
-    // 檢查是否全部打掉
-    // ================================
     bool AllTargetsDestroyed()
     {
         foreach (var t in targets)
-        {
-            if (t.activeSelf)
-                return false;
-        }
+            if (t.activeSelf) return false;
 
         return true;
     }
 
-    // ================================
-    // Respawn
-    // ================================
     IEnumerator RespawnRoutine()
     {
         respawning = true;
-
         yield return new WaitForSeconds(respawnDelay);
 
         foreach (var t in targets)
             Destroy(t);
-
         targets.Clear();
 
         SpawnTargets();
-
         respawning = false;
     }
 
-    // ================================
-    // Hit
-    // ================================
-    public void HitTarget(GameObject target)
+    // 光點進入格子就算命中，不需要碰到 Target
+    public void HitTargetByCell(int gx, int gy)
     {
-        if (!target.activeSelf)
-            return;
+        foreach (var t in targets)
+        {
+            if (!t.activeSelf) continue;
 
-        target.SetActive(false);
+            TargetCell tc = t.GetComponent<TargetCell>();
+            if (tc != null && tc.gridX == gx && tc.gridY == gy)
+            {
+                // 重新計算 ID：從左上角開始編號，依行（左->右）再列（上->下）
+                int id = (detector.gridY - 1 - tc.gridY) * detector.gridX + tc.gridX;
+                Debug.Log($"Hit Target Grid ({tc.gridX},{tc.gridY}) ID:{id}");
 
-        score++;
-
-        UpdateScoreUI();
+                t.SetActive(false);
+                score++;
+                UpdateScoreUI();
+                break;
+            }
+        }
     }
 
-    // ================================
-    // UI
-    // ================================
     void UpdateScoreUI()
     {
         if (scoreText != null)

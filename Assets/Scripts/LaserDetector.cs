@@ -1,6 +1,7 @@
-using UnityEngine;
-using UnityEngine.UI;
 using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Events;
+using UnityEngine.UI;
 
 public class LaserDetector : MonoBehaviour
 {
@@ -22,8 +23,9 @@ public class LaserDetector : MonoBehaviour
     public int persistenceFrames = 2;
 
     [Header("Grid")]
-    public int gridX = 12;
-    public int gridY = 8;
+    public int gridX = 3;
+    public int gridY = 3;
+    public bool IsGridReady { get; private set; }
 
     [Header("UI")]
     public GameObject laserDotPrefab;
@@ -35,8 +37,13 @@ public class LaserDetector : MonoBehaviour
 
     [Header("Performance")]
     public int processEveryNFrames = 2;
-    private GameObject ResetButton;
-    public Button resetGridButton;
+
+    [Header("Reset Button")]
+    public GameObject ResetButton;
+    private Button resetGridButton;
+
+    [Header("Events")]
+    public UnityEvent<int, int, float> onGridHit;
 
     TargetManager targetManager;
     RectTransform gridContainer;
@@ -45,6 +52,9 @@ public class LaserDetector : MonoBehaviour
     RectTransform[,] controlPoints;
     List<Image> gridLines = new List<Image>();
     List<RectTransform> laserDots = new List<RectTransform>();
+
+    // PlayerPrefs key prefix（以 GameObject.name 為前綴，避免多個 Detector 互相覆寫）
+    private string prefsPrefix;
 
     struct GridCell
     {
@@ -57,16 +67,29 @@ public class LaserDetector : MonoBehaviour
         }
     }
 
+    void Awake()
+    {
+        prefsPrefix = gameObject.name + "_LaserDetector_";
+    }
+
     void Start()
     {
-        pixels = new Color32[sourceWebcam.width * sourceWebcam.height];
+        // 先載入儲存的 grid 大小（如果有）
+        LoadGridSize();
+
+        // pixels 會在 DetectLaserGrid 裡檢查尺寸並重分配，這裡盡量避免 null 狀況
+        pixels = new Color32[0];
+
         persistenceCounter = new int[gridX, gridY];
         targetManager = FindObjectOfType<TargetManager>();
+
         ResetButton = GameObject.FindGameObjectWithTag("Reset");
-        resetGridButton = ResetButton.GetComponent<Button>();
+        if (ResetButton != null)
+            resetGridButton = ResetButton.GetComponent<Button>();
 
         CreateGrid();
         LoadGridState();
+        IsGridReady = true;
 
         if (resetGridButton != null)
             resetGridButton.onClick.AddListener(ResetGrid);
@@ -74,7 +97,7 @@ public class LaserDetector : MonoBehaviour
 
     void Update()
     {
-        if (!sourceWebcam.isPlaying) return;
+        if (sourceWebcam == null || !sourceWebcam.isPlaying) return;
         if (Time.frameCount % processEveryNFrames != 0) return;
         if (thresholdSlider != null) threshold = thresholdSlider.value;
 
@@ -131,10 +154,64 @@ public class LaserDetector : MonoBehaviour
         UpdateGridVisual();
     }
 
+    // 新增：公開方法，用於在執行期安全變更格子數
+    public void SetGridSize(int newGridX, int newGridY)
+    {
+        newGridX = Mathf.Max(1, newGridX);
+        newGridY = Mathf.Max(1, newGridY);
+        if (newGridX == gridX && newGridY == gridY) return;
+
+        gridX = newGridX;
+        gridY = newGridY;
+
+        // 儲存格子尺寸，立即生效並重建 grid
+        SaveGridSize();
+        RebuildGrid();
+    }
+
+    // 新增：重建格子與相關資料結構
+    void RebuildGrid()
+    {
+        // 刪除舊的 grid container（包含 control points 與 grid lines）
+        if (gridContainer != null)
+        {
+            Destroy(gridContainer.gameObject);
+            gridContainer = null;
+        }
+
+        // 刪除並清空 laser dots（它們不是 gridContainer 的子物件）
+        for (int i = laserDots.Count - 1; i >= 0; i--)
+        {
+            if (laserDots[i] != null)
+                Destroy(laserDots[i].gameObject);
+        }
+        laserDots.Clear();
+
+        // 清空 gridLines 參考（實體可能已被 parent 刪除）
+        gridLines.Clear();
+
+        // 清空 controlPoints 參考並重建 persistenceCounter
+        controlPoints = null;
+        persistenceCounter = new int[gridX, gridY];
+
+        // 重新建立 grid（CreateGrid 會重建 control points）
+        CreateGrid();
+
+        // 載入儲存的 control point 位置（若有）
+        LoadGridState();
+
+        UpdateGridVisual();
+        SaveGridState();
+
+        IsGridReady = true;
+    }
+
     public void UpdateGridVisual()
     {
+        if (!showGrid) return;
+
         foreach (var l in gridLines)
-            Destroy(l.gameObject);
+            if (l != null) Destroy(l.gameObject);
         gridLines.Clear();
 
         for (int y = 0; y <= gridY; y++)
@@ -167,20 +244,35 @@ public class LaserDetector : MonoBehaviour
         gridLines.Add(img);
     }
 
-    Vector2 GetWarpedPosition(int gx, int gy)
+    public void GetCellCorners(int gx, int gy, out Vector2 bl, out Vector2 br, out Vector2 tr, out Vector2 tl)
     {
         RectTransform p00 = controlPoints[gx, gy];
         RectTransform p10 = controlPoints[gx + 1, gy];
         RectTransform p01 = controlPoints[gx, gy + 1];
         RectTransform p11 = controlPoints[gx + 1, gy + 1];
 
-        return (p00.anchoredPosition + p10.anchoredPosition + p01.anchoredPosition + p11.anchoredPosition) / 4f;
+        bl = p00.anchoredPosition;
+        br = p10.anchoredPosition;
+        tr = p11.anchoredPosition;
+        tl = p01.anchoredPosition;
+    }
+
+    public Vector2 GetWarpedPosition(int gx, int gy)
+    {
+        GetCellCorners(gx, gy, out Vector2 bl, out Vector2 br, out Vector2 tr, out Vector2 tl);
+        return (bl + br + tr + tl) / 4f;
     }
 
     void DetectLaserGrid()
     {
         int width = sourceWebcam.width;
         int height = sourceWebcam.height;
+        if (width <= 0 || height <= 0) return;
+
+        // 確保 pixels 陣列尺寸正確（防止 webcam 在不同時間點回傳不同解析度）
+        if (pixels == null || pixels.Length != width * height)
+            pixels = new Color32[width * height];
+
         sourceWebcam.GetPixels32(pixels);
 
         int cellW = width / gridX;
@@ -202,6 +294,7 @@ public class LaserDetector : MonoBehaviour
                     {
                         int px = startX + x;
                         int py = startY + y;
+                        if (px < 0 || px >= width || py < 0 || py >= height) continue;
                         int idx = py * width + px;
                         float b = pixels[idx].r / 255f;
                         brightnessSum += b;
@@ -234,8 +327,16 @@ public class LaserDetector : MonoBehaviour
             Vector2 pos = GetWarpedPosition(cell.x, cell.y);
 
             RectTransform dot;
-            if (i < laserDots.Count) { dot = laserDots[i]; dot.gameObject.SetActive(true); }
-            else { dot = Instantiate(laserDotPrefab, cameraRawImage.transform).GetComponent<RectTransform>(); laserDots.Add(dot); }
+            if (i < laserDots.Count)
+            {
+                dot = laserDots[i];
+                dot.gameObject.SetActive(true);
+            }
+            else
+            {
+                dot = Instantiate(laserDotPrefab, cameraRawImage.transform).GetComponent<RectTransform>();
+                laserDots.Add(dot);
+            }
 
             dot.anchorMin = Vector2.zero;
             dot.anchorMax = Vector2.zero;
@@ -245,25 +346,13 @@ public class LaserDetector : MonoBehaviour
             Image img = dot.GetComponent<Image>();
             img.color = cell.brightness > highPowerThreshold ? Color.green : Color.white;
 
-            CheckTargetHit(cell);
+            onGridHit?.Invoke(cell.x, cell.y, cell.brightness);
+
+            // 光點進入格子即算命中，不需要碰到 Target
+            targetManager.HitTargetByCell(cell.x, cell.y);
         }
     }
 
-    void CheckTargetHit(GridCell laserCell)
-    {
-        GameObject[] targets = GameObject.FindGameObjectsWithTag("Target");
-        foreach (var t in targets)
-        {
-            if (!t.activeSelf) continue;
-            TargetCell tc = t.GetComponent<TargetCell>();
-            if (tc != null && tc.gridX == laserCell.x && tc.gridY == laserCell.y)
-                targetManager.HitTarget(t);
-        }
-    }
-
-    // =================================
-    // Target 隨 Grid 動態更新
-    // =================================
     public void UpdateTargetsPosition()
     {
         GameObject[] targets = GameObject.FindGameObjectsWithTag("Target");
@@ -274,21 +363,21 @@ public class LaserDetector : MonoBehaviour
             {
                 Vector2 pos = GetWarpedPosition(tc.gridX, tc.gridY);
                 RectTransform rt = t.GetComponent<RectTransform>();
+                rt.anchorMin = Vector2.zero;
+                rt.anchorMax = Vector2.zero;
+                rt.pivot = new Vector2(0.5f, 0.5f);
                 rt.anchoredPosition = pos;
             }
         }
     }
 
-    // =================================
-    // Grid 保存/載入
-    // =================================
     public void SaveGridState()
     {
         for (int y = 0; y <= gridY; y++)
             for (int x = 0; x <= gridX; x++)
             {
-                string keyX = $"Grid_{x}_{y}_X";
-                string keyY = $"Grid_{x}_{y}_Y";
+                string keyX = $"{prefsPrefix}Grid_{x}_{y}_X";
+                string keyY = $"{prefsPrefix}Grid_{x}_{y}_Y";
                 Vector2 pos = controlPoints[x, y].anchoredPosition;
                 PlayerPrefs.SetFloat(keyX, pos.x);
                 PlayerPrefs.SetFloat(keyY, pos.y);
@@ -302,8 +391,8 @@ public class LaserDetector : MonoBehaviour
         for (int y = 0; y <= gridY; y++)
             for (int x = 0; x <= gridX; x++)
             {
-                string keyX = $"Grid_{x}_{y}_X";
-                string keyY = $"Grid_{x}_{y}_Y";
+                string keyX = $"{prefsPrefix}Grid_{x}_{y}_X";
+                string keyY = $"{prefsPrefix}Grid_{x}_{y}_Y";
                 if (PlayerPrefs.HasKey(keyX) && PlayerPrefs.HasKey(keyY))
                 {
                     hasSaved = true;
@@ -327,5 +416,22 @@ public class LaserDetector : MonoBehaviour
 
         UpdateGridVisual();
         SaveGridState();
+    }
+
+    // 儲存 / 載入 gridX / gridY
+    void SaveGridSize()
+    {
+        PlayerPrefs.SetInt(prefsPrefix + "gridX", gridX);
+        PlayerPrefs.SetInt(prefsPrefix + "gridY", gridY);
+        PlayerPrefs.Save();
+    }
+
+    void LoadGridSize()
+    {
+        prefsPrefix = gameObject.name + "_LaserDetector_";
+        if (PlayerPrefs.HasKey(prefsPrefix + "gridX"))
+            gridX = Mathf.Max(1, PlayerPrefs.GetInt(prefsPrefix + "gridX"));
+        if (PlayerPrefs.HasKey(prefsPrefix + "gridY"))
+            gridY = Mathf.Max(1, PlayerPrefs.GetInt(prefsPrefix + "gridY"));
     }
 }

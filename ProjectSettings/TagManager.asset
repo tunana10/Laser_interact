@@ -6,6 +6,7 @@ TagManager:
   tags:
   - Target
   - Reset
+  - Detector
   layers:
   - Default
   - TransparentFX

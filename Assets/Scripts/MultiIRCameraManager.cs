@@ -11,6 +11,9 @@ public class MultiIRCameraManager : MonoBehaviour
 
     public Slider thresholdSlider;
 
+    // 給 UI 面板使用的 Detector 清單
+    public List<LaserDetector> detectors = new List<LaserDetector>();
+
     private List<WebCamTexture> camTextures = new List<WebCamTexture>();
 
     void Start()
@@ -79,24 +82,23 @@ public class MultiIRCameraManager : MonoBehaviour
         imgObj.transform.SetParent(cameraContainer, false);
 
         RawImage raw = imgObj.AddComponent<RawImage>();
-
-        raw.texture = tex;   // ← 直接顯示 WebCamTexture
+        raw.texture = tex;
 
         RectTransform rect = raw.GetComponent<RectTransform>();
         rect.sizeDelta = cameraDisplaySize;
         rect.anchorMin = new Vector2(0, 0.5f);
         rect.anchorMax = new Vector2(0, 0.5f);
         rect.anchoredPosition = new Vector2(index * cameraDisplaySize.x + 50, 0);
+
         //==============================================
         // (2) LaserDetector
         //==============================================
         LaserDetector detector = imgObj.AddComponent<LaserDetector>();
         detector.sourceWebcam = tex;
-        //detector.renderTexture = rt;
         detector.cameraRawImage = raw;
-        //detector.laserDotUI = dotRT;
         detector.thresholdSlider = thresholdSlider;
-        detector.laserDotPrefab = laserDotPrefab; // 讓 LaserDetector 自行生成多個紅點
-        //detector.dotContainer = dotContainer;
+        detector.laserDotPrefab = laserDotPrefab;
+
+        detectors.Add(detector);
     }
 }
