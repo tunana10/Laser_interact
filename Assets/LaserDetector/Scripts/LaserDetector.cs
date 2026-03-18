@@ -382,26 +382,25 @@ public class LaserDetector : MonoBehaviour
 
             onGridHit?.Invoke(cell.x, cell.y, cell.brightness);
 
-            // 光點進入格子即算命中，不需要碰到 Target
+            // 光點進入格子即算命中，不需要碰到 Target/Obstacle
             targetManager.HitTargetByCell(cell.x, cell.y);
         }
     }
 
     public void UpdateTargetsPosition()
     {
-        GameObject[] targets = GameObject.FindGameObjectsWithTag("Target");
-        foreach (var t in targets)
+        // 改為找到所有帶 TargetCell 的物件，包含 targets 與 obstacles
+        TargetCell[] tcs = FindObjectsOfType<TargetCell>();
+        foreach (var tc in tcs)
         {
-            TargetCell tc = t.GetComponent<TargetCell>();
-            if (tc != null)
-            {
-                Vector2 pos = GetWarpedPosition(tc.gridX, tc.gridY);
-                RectTransform rt = t.GetComponent<RectTransform>();
-                rt.anchorMin = Vector2.zero;
-                rt.anchorMax = Vector2.zero;
-                rt.pivot = new Vector2(0.5f, 0.5f);
-                rt.anchoredPosition = pos;
-            }
+            if (tc == null) continue;
+            Vector2 pos = GetWarpedPosition(tc.gridX, tc.gridY);
+            RectTransform rt = tc.GetComponent<RectTransform>();
+            if (rt == null) continue;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.zero;
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = pos;
         }
     }
 

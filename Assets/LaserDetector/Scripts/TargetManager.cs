@@ -11,14 +11,16 @@ public class TargetManager : MonoBehaviour
 {
     public RectTransform dotContainer;
     public GameObject targetPrefab;
-
+    public GameObject obstaclePrefab;         // 新增：障礙物 Prefab（可為空，會使用 targetPrefab 並改色）
     public int targetCount = 5;
+    public int obstacleCount = 3;            // 新增：隨機生成的障礙物數量
     public float respawnDelay = 3f;
 
     public Text scoreText;
 
     private LaserDetector detector;
     private List<GameObject> targets = new List<GameObject>();
+    private List<GameObject> obstacles = new List<GameObject>(); // 障礙物清單
     private int score = 0;
 
     // Mode toggles (Inspector)
@@ -28,7 +30,19 @@ public class TargetManager : MonoBehaviour
     // 編輯模式用：點擊格子時的選取半徑比例（相對於 cell 的寬/高）
     public float clickRadiusFraction = 1f;
 
-    private Dictionary<Vector2Int, GameObject> cellToTarget = new Dictionary<Vector2Int, GameObject>();
+    // 新：cell -> 物件（target / obstacle）映射
+    private enum CellItemType { Target, Obstacle }
+    private class CellItem
+    {
+        public GameObject go;
+        public CellItemType type;
+        public float spawnAt;
+        public CellItem(GameObject g, CellItemType t) { go = g; type = t; spawnAt = Time.time; }
+    }
+    private Dictionary<Vector2Int, CellItem> cellItems = new Dictionary<Vector2Int, CellItem>();
+
+    // 可選：生成後短暫無敵（避免剛生成就被偵測）
+    public float spawnInvulnerability = 0f;
 
     bool respawning = false;
     bool isEditMode = false;
@@ -47,7 +61,7 @@ public class TargetManager : MonoBehaviour
             editModeToggle.onValueChanged.AddListener(OnEditModeToggleChanged);
         }
 
-        // 初始互斥處理：若兩個都沒綁，預設隨機模式；若兩個都打勾，取消 edit
+        // 初始互斥處理
         if (randomModeToggle == null && editModeToggle == null)
         {
             isEditMode = false;
@@ -105,14 +119,14 @@ public class TargetManager : MonoBehaviour
         while (!detector.IsGridReady)
             yield return null;
 
-        // 根據模式決定是否生成隨機 target
+        // 根據模式決定是否生成隨機 target / obstacle
         bool startRandom = true;
         if (editModeToggle != null) startRandom = !editModeToggle.isOn;
         if (randomModeToggle != null) startRandom = randomModeToggle.isOn;
         isEditMode = !startRandom;
 
         if (startRandom)
-            SpawnTargets();
+            SpawnTargetsAndObstacles();
 
         UpdateScoreUI();
     }
@@ -124,7 +138,7 @@ public class TargetManager : MonoBehaviour
         if (isEditMode)
         {
             HandleEditModeInput();
-            // 不做自動重生檢查
+            // 編輯模式不做自動重生檢查
             return;
         }
 
@@ -136,47 +150,61 @@ public class TargetManager : MonoBehaviour
     {
         if (detector == null || !detector.IsGridReady) return;
 
-        bool clicked = false;
+        bool leftClicked = false;
+        bool rightClicked = false;
         Vector2 clickScreenPos = Vector2.zero;
 
 #if ENABLE_LEGACY_INPUT_MANAGER
-        // 舊輸入 API（優先使用）
         if (Input.GetMouseButtonDown(0))
         {
-            clicked = true;
+            leftClicked = true;
+            clickScreenPos = Input.mousePosition;
+        }
+        if (Input.GetMouseButtonDown(1))
+        {
+            rightClicked = true;
             clickScreenPos = Input.mousePosition;
         }
 #endif
 
 #if ENABLE_INPUT_SYSTEM
-        // 新 Input System
-        if (!clicked)
+        if (!leftClicked)
         {
             var mouse = Mouse.current;
             if (mouse != null && mouse.leftButton.wasPressedThisFrame)
             {
-                clicked = true;
+                leftClicked = true;
                 clickScreenPos = mouse.position.ReadValue();
             }
-            else if (Touchscreen.current != null)
+        }
+        if (!rightClicked)
+        {
+            var mouse = Mouse.current;
+            if (mouse != null && mouse.rightButton != null && mouse.rightButton.wasPressedThisFrame)
             {
-                var primary = Touchscreen.current.primaryTouch;
-                if (primary != null && primary.press.wasPressedThisFrame)
-                {
-                    clicked = true;
-                    clickScreenPos = primary.position.ReadValue();
-                }
+                rightClicked = true;
+                clickScreenPos = mouse.position.ReadValue();
+            }
+        }
+        // 支援觸控（視需求）
+        if (!leftClicked && Touchscreen.current != null)
+        {
+            var primary = Touchscreen.current.primaryTouch;
+            if (primary != null && primary.press.wasPressedThisFrame)
+            {
+                leftClicked = true;
+                clickScreenPos = primary.position.ReadValue();
             }
         }
 #endif
 
-        if (!clicked) return;
+        if (!leftClicked && !rightClicked) return;
 
         // 取得 Canvas 與 camera（對於 ScreenSpaceOverlay 傳 null）
         Canvas canvas = detector.cameraRawImage.GetComponentInParent<Canvas>();
         Camera uiCam = (canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay) ? canvas.worldCamera : null;
 
-        // 如果有 Canvas + GraphicRaycaster，raycast 判斷點擊落在哪個 UI 元件上
+        // 判斷點擊是否落在 cameraRawImage（若點到其他 UI 則忽略）
         if (EventSystem.current != null && canvas != null)
         {
             GraphicRaycaster gr = canvas.GetComponent<GraphicRaycaster>();
@@ -214,13 +242,11 @@ public class TargetManager : MonoBehaviour
             }
         }
 
-        // 取得點擊在 gridContainer 的 local 座標（LaserDetector 提供的 helper）
+        // 取得點擊在 gridContainer 的 local 座標（pivot-centered）
         if (!detector.TryScreenPointToGridLocalPoint(clickScreenPos, uiCam, out Vector2 gridLocalPivotPoint))
             return;
 
-        // 重要：ScreenPointToLocalPointInRectangle 回傳的 localPoint origin 在 RectTransform 的 pivot（通常是中心）。
-        // controlPoints 的 anchoredPosition 在建立時用了以左下為 (0,0) 的座標（0..width, 0..height）。
-        // 需要把 pivot-centered local point 轉成左下角為 origin 的座標，再做比較。
+        // 將 pivot-centered 轉成 左下角為原點的座標（和 controlPoints 的 anchoredPosition 同源）
         Rect rect = detector.cameraRawImage.rectTransform.rect;
         Vector2 gridLocalPoint = gridLocalPivotPoint + new Vector2(rect.width * 0.5f, rect.height * 0.5f);
 
@@ -252,37 +278,105 @@ public class TargetManager : MonoBehaviour
 
         if (foundGx >= 0 && bestDist <= thresholdSqr)
         {
-            ToggleTargetAtCell(foundGx, foundGy);
+            if (leftClicked)
+                ToggleTargetAtCell(foundGx, foundGy);
+            else if (rightClicked)
+                ToggleObstacleAtCell(foundGx, foundGy);
         }
     }
 
     void ToggleTargetAtCell(int gx, int gy)
     {
         Vector2Int key = new Vector2Int(gx, gy);
-        if (cellToTarget.TryGetValue(key, out GameObject existing))
+        if (cellItems.TryGetValue(key, out CellItem existing))
         {
-            // 移除 target
-            if (existing != null)
-                Destroy(existing);
-            cellToTarget.Remove(key);
-            targets.Remove(existing);
+            if (existing.type == CellItemType.Target)
+            {
+                // 移除 target
+                if (existing.go != null) Destroy(existing.go);
+                cellItems.Remove(key);
+                targets.Remove(existing.go);
+            }
+            else
+            {
+                // cell 有 obstacle：移除 obstacle 並建立 target
+                if (existing.go != null) Destroy(existing.go);
+                cellItems.Remove(key);
+                obstacles.Remove(existing.go);
+                CreateTargetAtCell(gx, gy);
+            }
         }
         else
         {
-            // 新增 target
-            GameObject t = Instantiate(targetPrefab, dotContainer);
-            PlaceTargetOnGrid(t, gx, gy);
-            targets.Add(t);
-            cellToTarget[key] = t;
+            CreateTargetAtCell(gx, gy);
         }
     }
 
-    void SpawnTargets()
+    void ToggleObstacleAtCell(int gx, int gy)
     {
-        ClearTargets(); // 先清掉現有的，避免重複
+        Vector2Int key = new Vector2Int(gx, gy);
+        if (cellItems.TryGetValue(key, out CellItem existing))
+        {
+            if (existing.type == CellItemType.Obstacle)
+            {
+                // 移除 obstacle
+                if (existing.go != null) Destroy(existing.go);
+                cellItems.Remove(key);
+                obstacles.Remove(existing.go);
+            }
+            else
+            {
+                // cell 有 target：移除 target 並建立 obstacle
+                if (existing.go != null) Destroy(existing.go);
+                cellItems.Remove(key);
+                targets.Remove(existing.go);
+                CreateObstacleAtCell(gx, gy);
+            }
+        }
+        else
+        {
+            CreateObstacleAtCell(gx, gy);
+        }
+    }
+
+    GameObject CreateTargetAtCell(int gx, int gy)
+    {
+        GameObject t = Instantiate(targetPrefab, dotContainer);
+        PlaceTargetOnGrid(t, gx, gy);
+        targets.Add(t);
+        Vector2Int key = new Vector2Int(gx, gy);
+        cellItems[key] = new CellItem(t, CellItemType.Target);
+        return t;
+    }
+
+    GameObject CreateObstacleAtCell(int gx, int gy)
+    {
+        GameObject o;
+        if (obstaclePrefab != null)
+            o = Instantiate(obstaclePrefab, dotContainer);
+        else
+            o = Instantiate(targetPrefab, dotContainer); // fallback：用 targetPrefab 並改色
+
+        PlaceObstacleOnGrid(o, gx, gy);
+
+        // 若使用 fallback，嘗試把 Image 設為紅色（若有 Image）
+        var img = o.GetComponent<Image>();
+        if (img != null)
+            img.color = Color.red;
+
+        obstacles.Add(o);
+        Vector2Int key = new Vector2Int(gx, gy);
+        cellItems[key] = new CellItem(o, CellItemType.Obstacle);
+        return o;
+    }
+
+    void SpawnTargetsAndObstacles()
+    {
+        ClearTargets();
 
         HashSet<Vector2Int> usedCells = new HashSet<Vector2Int>();
 
+        // spawn targets
         int maxAttempts = Mathf.Max(1, detector.gridX * detector.gridY * 2);
         for (int i = 0; i < targetCount; i++)
         {
@@ -304,7 +398,40 @@ public class TargetManager : MonoBehaviour
             GameObject t = Instantiate(targetPrefab, dotContainer);
             PlaceTargetOnGrid(t, cell.x, cell.y);
             targets.Add(t);
-            cellToTarget[cell] = t;
+            cellItems[cell] = new CellItem(t, CellItemType.Target);
+        }
+
+        // spawn obstacles (不與 targets 重複)
+        maxAttempts = Mathf.Max(1, detector.gridX * detector.gridY * 2);
+        for (int i = 0; i < obstacleCount; i++)
+        {
+            Vector2Int cell;
+            int attempts = 0;
+            do
+            {
+                int gx = Random.Range(0, detector.gridX);
+                int gy = Random.Range(0, detector.gridY);
+                cell = new Vector2Int(gx, gy);
+                attempts++;
+                if (attempts > maxAttempts) break;
+            } while (usedCells.Contains(cell));
+
+            if (usedCells.Contains(cell)) continue;
+
+            usedCells.Add(cell);
+
+            GameObject o;
+            if (obstaclePrefab != null)
+                o = Instantiate(obstaclePrefab, dotContainer);
+            else
+                o = Instantiate(targetPrefab, dotContainer);
+
+            PlaceObstacleOnGrid(o, cell.x, cell.y);
+            var img = o.GetComponent<Image>();
+            if (img != null) img.color = Color.red;
+
+            obstacles.Add(o);
+            cellItems[cell] = new CellItem(o, CellItemType.Obstacle);
         }
     }
 
@@ -313,15 +440,37 @@ public class TargetManager : MonoBehaviour
         RectTransform cam = detector.cameraRawImage.rectTransform;
         RectTransform rt = target.GetComponent<RectTransform>();
 
-        // 把 target 以左下為 origin 的 anchoredPosition 放在 cameraRawImage 上：
+        // 改為以 cameraRawImage 的左下為座標系
         rt.SetParent(cam, false);
         rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.zero; // <- 修正：不要使用 stretch anchors
+        rt.anchorMax = Vector2.zero;
         rt.pivot = new Vector2(0.5f, 0.5f);
 
         TargetCell tc = target.GetComponent<TargetCell>();
         if (tc == null)
             tc = target.AddComponent<TargetCell>();
+
+        tc.gridX = gx;
+        tc.gridY = gy;
+
+        Vector2 pos = detector.GetWarpedPosition(gx, gy);
+        rt.anchoredPosition = pos;
+    }
+
+    void PlaceObstacleOnGrid(GameObject obstacle, int gx, int gy)
+    {
+        // 與 PlaceTargetOnGrid 一樣的定位邏輯
+        RectTransform cam = detector.cameraRawImage.rectTransform;
+        RectTransform rt = obstacle.GetComponent<RectTransform>();
+
+        rt.SetParent(cam, false);
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.zero;
+        rt.pivot = new Vector2(0.5f, 0.5f);
+
+        TargetCell tc = obstacle.GetComponent<TargetCell>();
+        if (tc == null)
+            tc = obstacle.AddComponent<TargetCell>();
 
         tc.gridX = gx;
         tc.gridY = gy;
@@ -343,34 +492,49 @@ public class TargetManager : MonoBehaviour
         respawning = true;
         yield return new WaitForSeconds(respawnDelay);
 
-        foreach (var t in targets)
-            Destroy(t);
-        targets.Clear();
-        cellToTarget.Clear();
+        foreach (var t in new List<GameObject>(targets))
+            if (t != null) Destroy(t);
+        foreach (var o in new List<GameObject>(obstacles))
+            if (o != null) Destroy(o);
 
-        SpawnTargets();
+        targets.Clear();
+        obstacles.Clear();
+        cellItems.Clear();
+
+        SpawnTargetsAndObstacles();
         respawning = false;
     }
 
-    // 光點進入格子就算命中，不需要碰到 Target
+    // 光點進入格子就算命中，不需要碰到 Target/Obstacle
     public void HitTargetByCell(int gx, int gy)
     {
         Vector2Int key = new Vector2Int(gx, gy);
 
-        if (cellToTarget.TryGetValue(key, out GameObject t) && t != null && t.activeSelf)
+        if (cellItems.TryGetValue(key, out CellItem item) && item != null && item.go != null && item.go.activeSelf)
         {
-            TargetCell tc = t.GetComponent<TargetCell>();
-            if (tc != null)
-            {
-                int id = (detector.gridY - 1 - tc.gridY) * detector.gridX + tc.gridX;
-                Debug.Log($"Hit Target Grid ({tc.gridX},{tc.gridY}) ID:{id}");
+            // spawn invulnerability 檢查
+            if (spawnInvulnerability > 0f && Time.time - item.spawnAt < spawnInvulnerability)
+                return;
 
-                t.SetActive(false);
-                cellToTarget.Remove(key);
-                targets.Remove(t);
+            TargetCell tc = item.go.GetComponent<TargetCell>();
+            int id = (detector.gridY - 1 - gy) * detector.gridX + gx;
+            string typeStr = item.type == CellItemType.Target ? "Target" : "Obstacle";
+            Debug.Log($"Hit Grid ({gx},{gy}) ID:{id} Type:{typeStr}");
+
+            // 設為 inactive 並更新分數
+            item.go.SetActive(false);
+            cellItems.Remove(key);
+            if (item.type == CellItemType.Target)
+            {
+                targets.Remove(item.go);
                 score++;
-                UpdateScoreUI();
             }
+            else
+            {
+                obstacles.Remove(item.go);
+                score--;
+            }
+            UpdateScoreUI();
         }
     }
 
@@ -384,8 +548,12 @@ public class TargetManager : MonoBehaviour
     {
         foreach (var t in targets)
             if (t != null) Destroy(t);
+        foreach (var o in obstacles)
+            if (o != null) Destroy(o);
+
         targets.Clear();
-        cellToTarget.Clear();
+        obstacles.Clear();
+        cellItems.Clear();
     }
 
     // Toggle callbacks（由 UI Toggle 呼叫或由 Awake 設定 listener）
@@ -396,7 +564,7 @@ public class TargetManager : MonoBehaviour
             if (editModeToggle != null) editModeToggle.SetIsOnWithoutNotify(false);
             isEditMode = false;
             ClearTargets();
-            SpawnTargets();
+            SpawnTargetsAndObstacles();
         }
         else
         {
@@ -418,7 +586,7 @@ public class TargetManager : MonoBehaviour
             if (randomModeToggle != null && randomModeToggle.isOn)
             {
                 ClearTargets();
-                SpawnTargets();
+                SpawnTargetsAndObstacles();
             }
         }
     }
