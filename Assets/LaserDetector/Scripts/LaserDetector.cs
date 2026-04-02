@@ -12,7 +12,7 @@ public class LaserDetector : MonoBehaviour
     [Header("Detection")]
     public Slider thresholdSlider;
     [Range(0f, 1f)]
-    public float threshold = 0.5f;
+    public float threshold = 0.2f;
 
     [Header("Laser Power Levels")]
     public float lowPowerThreshold = 0.15f;
@@ -43,7 +43,8 @@ public class LaserDetector : MonoBehaviour
     private Button resetGridButton;
 
     [Header("Events")]
-    public UnityEvent<int, int, float> onGridHit;
+    // 修改：加入 isHighPower(bool) 作為第四個參數
+    public UnityEvent<int, int, float, bool> onGridHit;
 
     TargetManager targetManager;
     RectTransform gridContainer;
@@ -378,12 +379,14 @@ public class LaserDetector : MonoBehaviour
             dot.anchoredPosition = pos;
 
             Image img = dot.GetComponent<Image>();
-            img.color = cell.brightness > highPowerThreshold ? Color.green : Color.white;
+            bool isHighPower = cell.brightness > highPowerThreshold;
+            img.color = isHighPower ? Color.green : Color.white;
 
-            onGridHit?.Invoke(cell.x, cell.y, cell.brightness);
+            // 修改：onGridHit 現在傳入 isHighPower
+            onGridHit?.Invoke(cell.x, cell.y, cell.brightness, isHighPower);
 
-            // 光點進入格子即算命中，不需要碰到 Target/Obstacle
-            targetManager.HitTargetByCell(cell.x, cell.y);
+            // 修改：把 isHighPower 傳給 TargetManager
+            targetManager.HitTargetByCell(cell.x, cell.y, isHighPower);
         }
     }
 

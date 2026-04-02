@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -11,9 +12,9 @@ public class TargetManager : MonoBehaviour
 {
     public RectTransform dotContainer;
     public GameObject targetPrefab;
-    public GameObject obstaclePrefab;         // 新增：障礙物 Prefab（可為空，會使用 targetPrefab 並改色）
+    public GameObject obstaclePrefab;         // 障礙物 Prefab（可為空，會使用 targetPrefab 並改色）
     public int targetCount = 5;
-    public int obstacleCount = 3;            // 新增：隨機生成的障礙物數量
+    public int obstacleCount = 3;            // 隨機生成的障礙物數量
     public float respawnDelay = 3f;
 
     public Text scoreText;
@@ -43,6 +44,9 @@ public class TargetManager : MonoBehaviour
 
     // 可選：生成後短暫無敵（避免剛生成就被偵測）
     public float spawnInvulnerability = 0f;
+
+    // 新增：程式內的 C# 事件，供其他程式用程式碼訂閱（id, gx, gy, type, isHighPower）
+    public event Action<int, int, int, string, bool> OnItemHit;
 
     bool respawning = false;
     bool isEditMode = false;
@@ -384,8 +388,8 @@ public class TargetManager : MonoBehaviour
             int attempts = 0;
             do
             {
-                int gx = Random.Range(0, detector.gridX);
-                int gy = Random.Range(0, detector.gridY);
+                int gx = UnityEngine.Random.Range(0, detector.gridX);
+                int gy = UnityEngine.Random.Range(0, detector.gridY);
                 cell = new Vector2Int(gx, gy);
                 attempts++;
                 if (attempts > maxAttempts) break;
@@ -409,8 +413,8 @@ public class TargetManager : MonoBehaviour
             int attempts = 0;
             do
             {
-                int gx = Random.Range(0, detector.gridX);
-                int gy = Random.Range(0, detector.gridY);
+                int gx = UnityEngine.Random.Range(0, detector.gridX);
+                int gy = UnityEngine.Random.Range(0, detector.gridY);
                 cell = new Vector2Int(gx, gy);
                 attempts++;
                 if (attempts > maxAttempts) break;
@@ -506,7 +510,8 @@ public class TargetManager : MonoBehaviour
     }
 
     // 光點進入格子就算命中，不需要碰到 Target/Obstacle
-    public void HitTargetByCell(int gx, int gy)
+    // 修改：新增 isHighPower 參數（true = 綠點 -> 射擊；false = 白點 -> 瞄準）
+    public void HitTargetByCell(int gx, int gy, bool isHighPower)
     {
         Vector2Int key = new Vector2Int(gx, gy);
 
@@ -519,9 +524,13 @@ public class TargetManager : MonoBehaviour
             TargetCell tc = item.go.GetComponent<TargetCell>();
             int id = (detector.gridY - 1 - gy) * detector.gridX + gx;
             string typeStr = item.type == CellItemType.Target ? "Target" : "Obstacle";
-            Debug.Log($"Hit Grid ({gx},{gy}) ID:{id} Type:{typeStr}");
+            string modeStr = isHighPower ? "Shot(射擊)" : "Aim(瞄準)";
+            Debug.Log($"Hit Grid ({gx},{gy}) ID:{id} Type:{typeStr} Mode:{modeStr}");
 
-            // 設為 inactive 並更新分數
+            // 先發出程式內事件（供程式碼訂閱）
+            OnItemHit?.Invoke(id, gx, gy, typeStr, isHighPower);
+
+            // 設為 inactive 並更新分數（原邏輯不變）
             item.go.SetActive(false);
             cellItems.Remove(key);
             if (item.type == CellItemType.Target)
@@ -556,7 +565,6 @@ public class TargetManager : MonoBehaviour
         cellItems.Clear();
     }
 
-    // Toggle callbacks（由 UI Toggle 呼叫或由 Awake 設定 listener）
     void OnRandomModeToggleChanged(bool on)
     {
         if (on)

@@ -43,6 +43,8 @@ public class MultiIRCameraManager : MonoBehaviour
         string[] exactNames = {
             "LRCP V720P",
             "HD USB Camera"
+            
+            
         };
 
         foreach (var name in exactNames)
