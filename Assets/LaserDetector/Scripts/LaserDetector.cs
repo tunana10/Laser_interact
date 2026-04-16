@@ -300,55 +300,180 @@ public class LaserDetector : MonoBehaviour
 
     void DetectLaserGrid()
     {
-        int width = sourceWebcam.width;
-        int height = sourceWebcam.height;
-        if (width <= 0 || height <= 0) return;
+        int texW = sourceWebcam.width;
+        int texH = sourceWebcam.height;
+        if (texW <= 0 || texH <= 0) return;
 
         // 確保 pixels 陣列尺寸正確（防止 webcam 在不同時間點回傳不同解析度）
-        if (pixels == null || pixels.Length != width * height)
-            pixels = new Color32[width * height];
+        if (pixels == null || pixels.Length != texW * texH)
+            pixels = new Color32[texW * texH];
 
         sourceWebcam.GetPixels32(pixels);
 
-        int cellW = width / gridX;
-        int cellH = height / gridY;
-        List<GridCell> brightCells = new List<GridCell>();
+        // fallback：若 controlPoints 尚未建立或尺寸不符，維持原本行為（安全）
+        if (controlPoints == null || controlPoints.GetLength(0) != gridX + 1 || controlPoints.GetLength(1) != gridY + 1)
+        {
+            int cellW = texW / gridX;
+            int cellH = texH / gridY;
+            List<GridCell> brightCells = new List<GridCell>();
+
+            for (int gy = 0; gy < gridY; gy++)
+            {
+                for (int gx = 0; gx < gridX; gx++)
+                {
+                    float brightnessSum = 0f;
+                    int sampleCount = 0;
+                    int brightPixelCount = 0;
+                    int startX = gx * cellW;
+                    int startY = gy * cellH;
+
+                    for (int y = 0; y < cellH; y += 2)
+                        for (int x = 0; x < cellW; x += 2)
+                        {
+                            int px = startX + x;
+                            int py = startY + y;
+                            if (px < 0 || px >= texW || py < 0 || py >= texH) continue;
+                            int idx = py * texW + px;
+                            float b = pixels[idx].r / 255f;
+                            brightnessSum += b;
+                            sampleCount++;
+                            if (b > threshold) brightPixelCount++;
+                        }
+
+                    if (sampleCount == 0) continue;
+                    float avgBrightness = brightnessSum / sampleCount;
+                    if (brightPixelCount < minBrightPixels) { persistenceCounter[gx, gy] = 0; continue; }
+
+                    persistenceCounter[gx, gy]++;
+                    if (persistenceCounter[gx, gy] < persistenceFrames) continue;
+
+                    brightCells.Add(new GridCell(gx, gy, avgBrightness));
+                }
+            }
+
+            UpdateLaserDotsFromCells(brightCells);
+            return;
+        }
+
+        // 取得 Canvas / UI camera（ScreenSpaceOverlay 時為 null）
+        Canvas canvas = cameraRawImage.GetComponentInParent<Canvas>();
+        Camera uiCam = (canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay) ? canvas.worldCamera : null;
+
+        // raw image 的本地 rect（UI 空間）
+        Rect rawRect = cameraRawImage.rectTransform.rect;
+        float rawW = rawRect.width;
+        float rawH = rawRect.height;
+
+        // 使用影像的實際像素尺寸（以 sourceWebcam 為準）
+        // 計算顯示在 RawImage 內的影像區域（保持長寬比）
+        float scale = Mathf.Min(rawW / (float)texW, rawH / (float)texH);
+        float dispW = texW * scale;
+        float dispH = texH * scale;
+        float offsetX = (rawW - dispW) * 0.5f;
+        float offsetY = (rawH - dispH) * 0.5f;
+
+        List<GridCell> brightWarped = new List<GridCell>();
 
         for (int gy = 0; gy < gridY; gy++)
         {
             for (int gx = 0; gx < gridX; gx++)
             {
-                float brightnessSum = 0;
+                // 四角 control points -> 轉成 texture pixel 座標（0..texW,0..texH）
+                Vector2 bl = ControlPointToTexturePixel(controlPoints[gx, gy], uiCam, rawRect, texW, texH, dispW, dispH, offsetX, offsetY);
+                Vector2 br = ControlPointToTexturePixel(controlPoints[gx + 1, gy], uiCam, rawRect, texW, texH, dispW, dispH, offsetX, offsetY);
+                Vector2 tl = ControlPointToTexturePixel(controlPoints[gx, gy + 1], uiCam, rawRect, texW, texH, dispW, dispH, offsetX, offsetY);
+                Vector2 tr = ControlPointToTexturePixel(controlPoints[gx + 1, gy + 1], uiCam, rawRect, texW, texH, dispW, dispH, offsetX, offsetY);
+
+                // pixel-space bounding box (clamped for iteration)
+                float minXf = Mathf.Min(Mathf.Min(bl.x, br.x), Mathf.Min(tl.x, tr.x));
+                float maxXf = Mathf.Max(Mathf.Max(bl.x, br.x), Mathf.Max(tl.x, tr.x));
+                float minYf = Mathf.Min(Mathf.Min(bl.y, br.y), Mathf.Min(tl.y, tr.y));
+                float maxYf = Mathf.Max(Mathf.Max(bl.y, br.y), Mathf.Max(tl.y, tr.y));
+
+                int minX = Mathf.Clamp(Mathf.FloorToInt(minXf), 0, texW - 1);
+                int maxX = Mathf.Clamp(Mathf.CeilToInt(maxXf), 0, texW - 1);
+                int minY = Mathf.Clamp(Mathf.FloorToInt(minYf), 0, texH - 1);
+                int maxY = Mathf.Clamp(Mathf.CeilToInt(maxYf), 0, texH - 1);
+
+                float brightnessSum = 0f;
                 int sampleCount = 0;
                 int brightPixelCount = 0;
-                int startX = gx * cellW;
-                int startY = gy * cellH;
 
-                for (int y = 0; y < cellH; y += 2)
-                    for (int x = 0; x < cellW; x += 2)
+                // sub-sample every 2 pixels (保留原取樣間隔)
+                for (int py = minY; py <= maxY; py += 2)
+                {
+                    for (int px = minX; px <= maxX; px += 2)
                     {
-                        int px = startX + x;
-                        int py = startY + y;
-                        if (px < 0 || px >= width || py < 0 || py >= height) continue;
-                        int idx = py * width + px;
+                        Vector2 p = new Vector2(px + 0.5f, py + 0.5f); // sample at pixel center
+                        if (!PointInQuad(p, bl, br, tr, tl)) continue;
+
+                        int idx = py * texW + px;
                         float b = pixels[idx].r / 255f;
                         brightnessSum += b;
                         sampleCount++;
                         if (b > threshold) brightPixelCount++;
                     }
+                }
 
-                if (sampleCount == 0) continue;
+                if (sampleCount == 0) { persistenceCounter[gx, gy] = 0; continue; }
                 float avgBrightness = brightnessSum / sampleCount;
                 if (brightPixelCount < minBrightPixels) { persistenceCounter[gx, gy] = 0; continue; }
 
                 persistenceCounter[gx, gy]++;
                 if (persistenceCounter[gx, gy] < persistenceFrames) continue;
 
-                brightCells.Add(new GridCell(gx, gy, avgBrightness));
+                brightWarped.Add(new GridCell(gx, gy, avgBrightness));
             }
         }
 
-        UpdateLaserDotsFromCells(brightCells);
+        UpdateLaserDotsFromCells(brightWarped);
+    }
+
+    // --- helpers (新增方法) ---
+    // control point 的世界位置 -> RawImage 內 texture 的像素座標 (0..texW, 0..texH)
+    Vector2 ControlPointToTexturePixel(RectTransform cp, Camera uiCam, Rect rawRect, int texW, int texH, float dispW, float dispH, float offsetX, float offsetY)
+    {
+        if (cp == null) return new Vector2(-9999f, -9999f);
+
+        // world -> screen
+        Vector2 screenPt = RectTransformUtility.WorldToScreenPoint(uiCam, cp.position);
+        // screen -> rawImage local (pivot-centered)
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(cameraRawImage.rectTransform, screenPt, uiCam, out Vector2 localPt);
+        // 轉為以 rawRect 左下為原點的 local 座標
+        Vector2 localLB = new Vector2(localPt.x - rawRect.xMin, localPt.y - rawRect.yMin);
+        // 計算在顯示內容 (dispW x dispH) 中的 normalized 座標（可能超出 0..1）
+        float nx = dispW > 0f ? (localLB.x - offsetX) / dispW : -1f;
+        float ny = dispH > 0f ? (localLB.y - offsetY) / dispH : -1f;
+        // 轉為 texture 像素座標（不 clamp，讓後續 bounding-box 判定是否與 texture 有交集）
+        return new Vector2(nx * texW, ny * texH);
+    }
+
+    bool PointInQuad(Vector2 p, Vector2 bl, Vector2 br, Vector2 tr, Vector2 tl)
+    {
+        // triangle bl-br-tr OR bl-tr-tl
+        if (PointInTriangle(p, bl, br, tr)) return true;
+        if (PointInTriangle(p, bl, tr, tl)) return true;
+        return false;
+    }
+
+    bool PointInTriangle(Vector2 p, Vector2 a, Vector2 b, Vector2 c)
+    {
+        Vector2 v0 = c - a;
+        Vector2 v1 = b - a;
+        Vector2 v2 = p - a;
+
+        float dot00 = Vector2.Dot(v0, v0);
+        float dot01 = Vector2.Dot(v0, v1);
+        float dot02 = Vector2.Dot(v0, v2);
+        float dot11 = Vector2.Dot(v1, v1);
+        float dot12 = Vector2.Dot(v1, v2);
+
+        float denom = dot00 * dot11 - dot01 * dot01;
+        if (Mathf.Abs(denom) < 1e-8f) return false;
+        float invDenom = 1f / denom;
+        float u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+        float v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+        return (u >= -1e-6f) && (v >= -1e-6f) && (u + v <= 1f + 1e-6f);
     }
 
     void UpdateLaserDotsFromCells(List<GridCell> cells)

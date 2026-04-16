@@ -1689,7 +1689,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 25, y: -25}
+  m_AnchoredPosition: {x: 64.900024, y: -25}
   m_SizeDelta: {x: 50, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1002178316
@@ -1895,8 +1895,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 150, y: -200}
-  m_SizeDelta: {x: 300, y: 400}
+  m_AnchoredPosition: {x: 189.9, y: -250}
+  m_SizeDelta: {x: 300, y: 500}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1085352307
 MonoBehaviour:
@@ -2343,7 +2343,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: -150}
+  m_AnchoredPosition: {x: 0, y: -225}
   m_SizeDelta: {x: 500, y: 100}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1486113710
@@ -2980,12 +2980,15 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TargetManager
   dotContainer: {fileID: 1989356473}
   targetPrefab: {fileID: 1084669471925288463, guid: b93a7086dd59e2040b30dc861c7cdc7e, type: 3}
+  obstaclePrefab: {fileID: 0}
   targetCount: 5
+  obstacleCount: 3
   respawnDelay: 3
   scoreText: {fileID: 1379980497}
   randomModeToggle: {fileID: 2036498382}
   editModeToggle: {fileID: 810867413}
   clickRadiusFraction: 0.5
+  spawnInvulnerability: 0
 --- !u!4 &1942384424
 Transform:
   m_ObjectHideFlags: 0
