@@ -8,7 +8,6 @@ public class MultiIRCameraManager : MonoBehaviour
     public RectTransform dotContainer;
     public Vector2 cameraDisplaySize = new Vector2(320, 180);
     public GameObject laserDotPrefab;
-
     public Slider thresholdSlider;
 
     // 給 UI 面板使用的 Detector 清單
@@ -42,7 +41,8 @@ public class MultiIRCameraManager : MonoBehaviour
     {
         string[] exactNames = {
             "LRCP V720P",
-            "HD USB Camera"
+            "HD USB Camera",
+            "GIGABYTE HD CAMERA"
             
             
         };

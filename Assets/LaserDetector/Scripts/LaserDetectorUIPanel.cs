@@ -13,6 +13,9 @@ public class LaserDetectorUIPanel : MonoBehaviour
     public InputField gridXInput;
     public InputField gridYInput;
 
+    public InputField gridXInput_B;//第二台攝影機的Grid Inputs
+    public InputField gridYInput_B;
+
     [Header("Text")]
     public Text gridXValue;
     public Text gridYValue;
@@ -150,6 +153,54 @@ public class LaserDetectorUIPanel : MonoBehaviour
                 gridYInput.text = detector.gridY.ToString();
                 UpdateValueLabels();
             });
+        }
+
+        // --- Bind second camera inputs (gridXInput_B / gridYInput_B) ---
+        LaserDetector detectorB = null;
+        if (cameraManager != null && cameraManager.detectors != null && cameraManager.detectors.Count > 1)
+        {
+            detectorB = cameraManager.detectors[1];
+        }
+        else
+        {
+            // 如果沒有 cameraManager，可嘗試從場景中找到另一個 Detector（不是主 detector）
+            var all = FindObjectsOfType<LaserDetector>();
+            foreach (var d in all)
+            {
+                if (d != detector) { detectorB = d; break; }
+            }
+        }
+
+        if (gridXInput_B)
+        {
+            gridXInput_B.contentType = InputField.ContentType.IntegerNumber;
+            if (detectorB != null) gridXInput_B.text = detectorB.gridX.ToString();
+            else gridXInput_B.text = "";
+            gridXInput_B.onEndEdit.AddListener(s =>
+            {
+                if (detectorB == null) return;
+                if (!int.TryParse(s, out int v)) v = detectorB.gridX;
+                v = Mathf.Max(1, v);
+                detectorB.SetGridSize(v, detectorB.gridY);
+                gridXInput_B.text = detectorB.gridX.ToString();
+            });
+            gridXInput_B.interactable = detectorB != null;
+        }
+
+        if (gridYInput_B)
+        {
+            gridYInput_B.contentType = InputField.ContentType.IntegerNumber;
+            if (detectorB != null) gridYInput_B.text = detectorB.gridY.ToString();
+            else gridYInput_B.text = "";
+            gridYInput_B.onEndEdit.AddListener(s =>
+            {
+                if (detectorB == null) return;
+                if (!int.TryParse(s, out int v)) v = detectorB.gridY;
+                v = Mathf.Max(1, v);
+                detectorB.SetGridSize(detectorB.gridX, v);
+                gridYInput_B.text = detectorB.gridY.ToString();
+            });
+            gridYInput_B.interactable = detectorB != null;
         }
 
         if (resetGridButton) resetGridButton.onClick.AddListener(detector.ResetGrid);
