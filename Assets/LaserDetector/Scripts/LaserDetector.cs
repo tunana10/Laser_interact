@@ -611,4 +611,50 @@ public class LaserDetector : MonoBehaviour
             threshold = Mathf.Clamp01(PlayerPrefs.GetFloat(prefsPrefix + "threshold"));
         }
     }
+    // ...（檔案其他內容不變）...
+
+    // 新增：當拖曳四個外角之一時，使用雙線性插值（bilinear）計算並更新整個 controlPoints 的位置
+    // cornerGX/cornerGY 為被拖動的 control point 座標（整數）， newAnchoredPos 為該 control point 的新的 anchoredPosition（UI local, 以 cameraRawImage 的左下為基準）
+    public void DragCornerAndWarp(int cornerGX, int cornerGY, Vector2 newAnchoredPos)
+    {
+        if (controlPoints == null) return;
+        if (cornerGX != 0 && cornerGX != gridX) return;
+        if (cornerGY != 0 && cornerGY != gridY) return;
+
+        // 取得目前四個角的原始位置（UI local anchoredPosition）
+        Vector2 bl = controlPoints[0, 0].anchoredPosition;            // bottom-left (0,0)
+        Vector2 br = controlPoints[gridX, 0].anchoredPosition;        // bottom-right (gridX,0)
+        Vector2 tl = controlPoints[0, gridY].anchoredPosition;        // top-left (0,gridY)
+        Vector2 tr = controlPoints[gridX, gridY].anchoredPosition;    // top-right (gridX,gridY)
+
+        // 依被拖動的是哪一角，替換對應 corner 為 newAnchoredPos
+        if (cornerGX == 0 && cornerGY == 0) bl = newAnchoredPos;       // bottom-left
+        else if (cornerGX == gridX && cornerGY == 0) br = newAnchoredPos; // bottom-right
+        else if (cornerGX == 0 && cornerGY == gridY) tl = newAnchoredPos; // top-left
+        else if (cornerGX == gridX && cornerGY == gridY) tr = newAnchoredPos; // top-right
+
+        // 對每一個 control point 使用雙線性插值（dependent on normalized position nx,ny）
+        for (int y = 0; y <= gridY; y++)
+        {
+            for (int x = 0; x <= gridX; x++)
+            {
+                float nx = (gridX > 0) ? (x / (float)gridX) : 0f;
+                float ny = (gridY > 0) ? (y / (float)gridY) : 0f;
+
+                // bilinear interpolation:
+                // P(nx,ny) = (1-nx)*(1-ny)*bl + nx*(1-ny)*br + (1-nx)*ny*tl + nx*ny*tr
+                Vector2 p = (1f - nx) * (1f - ny) * bl
+                          + nx * (1f - ny) * br
+                          + (1f - nx) * ny * tl
+                          + nx * ny * tr;
+
+                controlPoints[x, y].anchoredPosition = p;
+            }
+        }
+
+        // 重新繪製 grid 與 targets，並儲存
+        UpdateGridVisual();
+        UpdateTargetsPosition();
+        SaveGridState();
+    }
 }

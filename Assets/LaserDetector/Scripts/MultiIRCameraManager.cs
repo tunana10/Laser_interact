@@ -42,7 +42,7 @@ public class MultiIRCameraManager : MonoBehaviour
         string[] exactNames = {
             "LRCP V720P",
             "HD USB Camera",
-            "GIGABYTE HD CAMERA"
+            //"GIGABYTE HD CAMERA"
             
             
         };
