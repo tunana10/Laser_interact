@@ -15,16 +15,16 @@ public class LaserDetector : MonoBehaviour
     public float threshold = 0.2f;
 
     [Header("Laser Power Levels")]
-    public float lowPowerThreshold = 0.15f;
-    public float highPowerThreshold = 0.2f;
+    public float lowPowerThreshold ;
+    public float highPowerThreshold ;
 
     [Header("Noise Filter")]
     public int minBrightPixels = 8;
     public int persistenceFrames = 2;
 
     [Header("Grid")]
-    public int gridX = 3;
-    public int gridY = 3;
+    public int gridX ;
+    public int gridY ;
     public bool IsGridReady { get; private set; }
 
     [Header("UI")]
@@ -597,19 +597,24 @@ public class LaserDetector : MonoBehaviour
     }
 
     // 儲存 / 載入 threshold
-    void SaveThreshold()
+    public void SaveThreshold()
     {
+        // 原有 threshold 與新增的 low/high 一併儲存
         PlayerPrefs.SetFloat(prefsPrefix + "threshold", threshold);
+        PlayerPrefs.SetFloat(prefsPrefix + "lowPowerThreshold", lowPowerThreshold);
+        PlayerPrefs.SetFloat(prefsPrefix + "highPowerThreshold", highPowerThreshold);
         PlayerPrefs.Save();
     }
 
-    void LoadThreshold()
+    public void LoadThreshold()
     {
         prefsPrefix = gameObject.name + "_LaserDetector_";
         if (PlayerPrefs.HasKey(prefsPrefix + "threshold"))
-        {
             threshold = Mathf.Clamp01(PlayerPrefs.GetFloat(prefsPrefix + "threshold"));
-        }
+        if (PlayerPrefs.HasKey(prefsPrefix + "lowPowerThreshold"))
+            lowPowerThreshold = Mathf.Clamp01(PlayerPrefs.GetFloat(prefsPrefix + "lowPowerThreshold"));
+        if (PlayerPrefs.HasKey(prefsPrefix + "highPowerThreshold"))
+            highPowerThreshold = Mathf.Clamp01(PlayerPrefs.GetFloat(prefsPrefix + "highPowerThreshold"));
     }
     // ...（檔案其他內容不變）...
 

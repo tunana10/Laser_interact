@@ -7,6 +7,8 @@ TagManager:
   - Target
   - Reset
   - Detector
+  - LowPowerThresholdInput
+  - HighPowerThresholdInput
   layers:
   - Default
   - TransparentFX
